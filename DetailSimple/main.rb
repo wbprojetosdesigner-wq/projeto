@@ -163,9 +163,101 @@ module DetailSimple
     submenu.add_item('Gerar Listas CSV') { export_csvs }
     submenu.add_item('Exportar Layout PNG') { export_layout_png }
     submenu.add_item('Gerar Cotação') { generate_quote }
+    submenu.add_item('Gerar Detalhamento') { create_detail_scenes }
     @loaded = true
   end
 
+end
+
+# ---------- Geração automática de cenas de detalhamento (DS_*) ----------
+def create_scene_with_camera(name, camera)
+  model = Sketchup.active_model
+  pages = model.pages
+  page = pages.add(name)
+  page.camera = camera
+  page
+end
+
+def create_detail_scenes
+  load_settings
+  model = Sketchup.active_model
+  unless model
+    UI.messagebox('Abra um modelo antes de gerar o detalhamento.')
+    return
+  end
+
+  output = @settings['output_dir'] || File.expand_path('..', File.dirname(__FILE__))
+  Dir.mkdir(output) unless File.exist?(output)
+
+  # esconder portas
+  doors = find_by_type_keyword(['porta','door','DOOR'])
+  original = hide_doors_temporarily(doors)
+
+  begin
+    # Planta baixa (top orthographic)
+    view = model.active_view
+    center = model.bounds.center
+    cam_top = Sketchup::Camera.new([center.x, center.y, center.z + model.bounds.height * 3], center, [0,0,1])
+    cam_top.perspective = false
+    page_top = create_scene_with_camera('DS_PLANTA', cam_top)
+
+    # Vistas frontais por paredes detectadas
+    walls = find_by_type_keyword(['parede','wall','WALL'])
+    if walls.empty?
+      # criar 4 vistas ortográficas (N,E,S,W)
+      b = model.bounds
+      centers = [
+        [b.center.x + b.width/2.0, b.center.y, b.center.z],
+        [b.center.x - b.width/2.0, b.center.y, b.center.z],
+        [b.center.x, b.center.y + b.depth/2.0, b.center.z],
+        [b.center.x, b.center.y - b.depth/2.0, b.center.z]
+      ]
+      i = 1
+      centers.each do |c|
+        eye = [c[0], c[1], c[2] + model.bounds.height]
+        cam = Sketchup::Camera.new(eye, [b.center.x, b.center.y, b.center.z], [0,0,1])
+        cam.perspective = false
+        create_scene_with_camera("DS_VISTA_#{i}", cam)
+        i += 1
+      end
+    else
+      walls.each_with_index do |w, idx|
+        c = w.bounds.center
+        dir = Geom::Vector3d.new(c.x - model.bounds.center.x, c.y - model.bounds.center.y, 0)
+        dir.length = 1 rescue nil
+        eye = dir ? [c.x + dir.x * model.bounds.width, c.y + dir.y * model.bounds.depth, c.z + model.bounds.height] : [c.x, c.y, c.z + model.bounds.height]
+        cam = Sketchup::Camera.new(eye, c, [0,0,1])
+        cam.perspective = false
+        create_scene_with_camera("DS_VISTA_#{idx+1}", cam)
+      end
+    end
+
+    # Cenas auxiliares: materiais, acessórios e cotação
+    # materiais: foco no material list
+    cam_mat = Sketchup::Camera.new([center.x, center.y, center.z + model.bounds.height*2], center, [0,0,1])
+    cam_mat.perspective = false
+    create_scene_with_camera('DS_MATERIAIS', cam_mat)
+
+    cam_acc = Sketchup::Camera.new([center.x, center.y, center.z + model.bounds.height*2], center, [0,0,1])
+    cam_acc.perspective = false
+    create_scene_with_camera('DS_ACESSORIOS', cam_acc)
+
+    # gerar miniaturas PNG das cenas (opcional)
+    pages = model.pages
+    pages.each do |p|
+      next unless p.name.start_with?('DS_')
+      p.restore_view
+      sleep(0.2)
+      view = model.active_view
+      img_path = File.join(output, "#{p.name}.png")
+      view.write_image(img_path, 1600, 1200, false)
+    end
+
+  ensure
+    restore_doors_layers(doors, original)
+  end
+
+  UI.messagebox("Cenas DS geradas e miniaturas salvas em: #{output}")
 end
 
 # ---------- Funções de geração de pranchas (planta baixa e vistas frontais) ----------
