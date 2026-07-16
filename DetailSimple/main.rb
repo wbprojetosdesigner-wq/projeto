@@ -162,7 +162,288 @@ module DetailSimple
     submenu.add_item('Configurações') { open_config }
     submenu.add_item('Gerar Listas CSV') { export_csvs }
     submenu.add_item('Exportar Layout PNG') { export_layout_png }
+    submenu.add_item('Gerar Cotação') { generate_quote }
     @loaded = true
   end
 
+end
+
+# ---------- Funções de geração de pranchas (planta baixa e vistas frontais) ----------
+def find_by_type_keyword(keywords)
+  model = Sketchup.active_model
+  return [] unless model
+  found = []
+  model.entities.each do |ent|
+    next unless ent.is_a?(Sketchup::ComponentInstance) || ent.is_a?(Sketchup::Group)
+    name = (ent.definition && ent.definition.name) || ent.name || ''
+    # atributos
+    has_attr = false
+    if ent.attribute_dictionaries
+      ent.attribute_dictionaries.each do |n, dict|
+        val = dict['DS_TYPE'] || dict['TYPE'] || dict['ds_type']
+        if val && keywords.any? { |k| val.to_s.upcase.include?(k.upcase) }
+          has_attr = true
+          break
+        end
+      end
+    end
+    if has_attr || keywords.any? { |k| name.to_s.downcase.include?(k.downcase) }
+      found << ent
+    end
+  end
+  found
+end
+
+def hide_doors_temporarily(doors)
+  return {} if doors.empty?
+  model = Sketchup.active_model
+  ds_layer = model.layers.add('DS_TEMP_DOORS') rescue model.layers.add('DS_TEMP_DOORS')
+  ds_layer.visible = false
+  original = {}
+  doors.each do |d|
+    begin
+      original[d.persistent_id] = d.layer.name if d.respond_to?(:layer) && d.layer
+      d.layer = ds_layer if d.respond_to?(:layer=)
+    rescue
+      next
+    end
+  end
+  original
+end
+
+def restore_doors_layers(doors, original)
+  return if doors.empty?
+  model = Sketchup.active_model
+  doors.each do |d|
+    begin
+      if original[d.persistent_id]
+        layer_name = original[d.persistent_id]
+        layer = model.layers[layer_name] || model.layers.add(layer_name)
+        d.layer = layer if d.respond_to?(:layer=)
+      end
+    rescue
+      next
+    end
+  end
+  # remove temp layer if exists
+  if model.layers['DS_TEMP_DOORS']
+    begin
+      model.layers.remove(model.layers['DS_TEMP_DOORS'])
+    rescue
+    end
+  end
+end
+
+def export_top_view(output_dir, scale_label)
+  model = Sketchup.active_model
+  view = model.active_view
+  center = model.bounds.center
+  cam = Sketchup::Camera.new([center.x, center.y, center.z + model.bounds.height * 3], center, [0,0,1])
+  cam.perspective = false
+  view.camera = cam
+  view.zoom_extents
+  path = File.join(output_dir, "planta_baixa_#{scale_label}.png")
+  view.write_image(path, 3000, 2000, false)
+  path
+end
+
+def export_front_views(output_dir, scale_label)
+  model = Sketchup.active_model
+  view = model.active_view
+  walls = find_by_type_keyword(['parede','wall','WALL'])
+  exported = []
+  if walls.empty?
+    # fallback: use bounding box sides (generate 4 facings)
+    b = model.bounds
+    centers = [
+      [b.center.x + b.width/2.0, b.center.y, b.center.z],
+      [b.center.x - b.width/2.0, b.center.y, b.center.z],
+      [b.center.x, b.center.y + b.depth/2.0, b.center.z],
+      [b.center.x, b.center.y - b.depth/2.0, b.center.z]
+    ]
+    i = 1
+    centers.each do |c|
+      cam = Sketchup::Camera.new([c[0], c[1], c[2]+model.bounds.height], [b.center.x, b.center.y, b.center.z], [0,0,1])
+      cam.perspective = false
+      view.camera = cam
+      view.zoom_extents
+      path = File.join(output_dir, "vista_frontal_#{i}_#{scale_label}.png")
+      view.write_image(path, 1600, 1200, false)
+      exported << path
+      i += 1
+    end
+  else
+    walls.each_with_index do |w, idx|
+      c = w.bounds.center
+      # approximate normal: vector from model center to wall center
+      dir = Geom::Vector3d.new(c.x - model.bounds.center.x, c.y - model.bounds.center.y, 0)
+      dir.length = 1
+      eye = [c.x + dir.x * (model.bounds.width), c.y + dir.y * (model.bounds.depth), c.z + model.bounds.height]
+      cam = Sketchup::Camera.new(eye, c, [0,0,1])
+      cam.perspective = false
+      view.camera = cam
+      view.zoom_extents
+      path = File.join(output_dir, "vista_frontal_#{idx+1}_#{scale_label}.png")
+      view.write_image(path, 1600, 1200, false)
+      exported << path
+    end
+  end
+  exported
+end
+
+def generate_sheets(scale = '1_20')
+  load_settings
+  model = Sketchup.active_model
+  output = @settings['output_dir'] || File.expand_path('..', File.dirname(__FILE__))
+  # find doors and hide
+  doors = find_by_type_keyword(['porta','door','DOOR'])
+  original = hide_doors_temporarily(doors)
+  begin
+    top = export_top_view(output, scale)
+    fronts = export_front_views(output, scale)
+  ensure
+    restore_doors_layers(doors, original)
+  end
+  UI.messagebox("Pranchas geradas:\n#{top}\n#{fronts.join('\n')}")
+end
+
+# ---------- Barra de ferramentas ----------
+def create_toolbar
+  toolbar = UI::Toolbar.new 'DetailSimple'
+
+  cmd_sheets = UI::Command.new('Gerar Pranchas') { generate_sheets('1_20') }
+  cmd_sheets.small_icon = File.join(File.dirname(__FILE__), 'icons', 'sheets_small.png') rescue nil
+  cmd_sheets.large_icon = File.join(File.dirname(__FILE__), 'icons', 'sheets_large.png') rescue nil
+  cmd_sheets.tooltip = 'Gerar pranchas: planta baixa e vistas frontais (1:20)'
+  toolbar.add_item cmd_sheets
+
+  cmd_csv = UI::Command.new('Gerar Listas CSV') { export_csvs }
+  cmd_csv.tooltip = 'Gerar listas CSV (Materiais, Eletros, Acessorios)'
+  toolbar.add_item cmd_csv
+
+  cmd_quote = UI::Command.new('Gerar Cotação') { generate_quote }
+  cmd_quote.tooltip = 'Gerar cotação a partir das listas'
+  toolbar.add_item cmd_quote
+
+  toolbar.show
+end
+
+create_toolbar
+
+def load_prices_file
+  prices_file = File.join(File.dirname(__FILE__), 'prices.json')
+  if File.exist?(prices_file)
+    begin
+      data = File.read(prices_file)
+      return JSON.parse(data)
+    rescue => e
+      UI.messagebox("Erro ao ler prices.json: #{e}")
+      return {}
+    end
+  end
+  {}
+end
+
+def parse_csv_rows(path)
+  rows = []
+  return rows unless File.exist?(path)
+  CSV.foreach(path, headers: true) do |r|
+    rows << r.to_hash
+  end
+  rows
+end
+
+def generate_quote
+  load_settings
+  prices = load_prices_file
+  prompts = ['Margem de lucro (%)', 'Impostos (%)', 'Valor hora mão de obra', 'Horas de mão de obra', 'Moeda']
+  defaults = ['20', '12', '50', '8', 'BRL']
+  input = UI.inputbox(prompts, defaults, 'Parâmetros de cotação - DetailSimple')
+  return unless input
+  margem = input[0].to_f
+  impostos = input[1].to_f
+  valor_hora = input[2].to_f
+  horas = input[3].to_f
+  moeda = input[4]
+
+  output = @settings['output_dir'] || File.expand_path('..', File.dirname(__FILE__))
+  materiais_csv = File.join(output, 'materiais.csv')
+  eletros_csv = File.join(output, 'eletros.csv')
+  acessorios_csv = File.join(output, 'acessorios.csv')
+
+  materiais = parse_csv_rows(materiais_csv)
+  eletros = parse_csv_rows(eletros_csv)
+  acessorios = parse_csv_rows(acessorios_csv)
+
+  unless materiais.any? || eletros.any? || acessorios.any?
+    UI.messagebox('Nenhum CSV encontrado em Pasta de saída. Gere as listas antes de cotar.')
+    return
+  end
+
+  lines = []
+  subtotal = 0.0
+
+  materiais.each do |m|
+    code = (m['COD'] || m['Code'] || m['cod'] || '').strip
+    desc = (m['DESCRICAO_DE_MATERIAIS'] || m['DESCRICAO'] || m['DESCRICAO_DE_MATERIAIS'] || m.values[1]).to_s
+    unit = prices[code] || prices[desc] || 0.0
+    qty = (m['QTD'] || m['QTY'] || '1').to_f
+    line = unit * qty
+    lines << ['Material', code, desc, unit, qty, line]
+    subtotal += line
+  end
+
+  eletros.each do |e|
+    code = (e['COD'] || e['Code'] || '').strip
+    desc = (e['DESCRICAO_DE_ELETROS_E_EQUIPAMENTOS'] || e['DESCRICAO'] || e.values[1]).to_s
+    unit = prices[code] || prices[desc] || 0.0
+    qty = (e['QTD'] || e['QTY'] || '1').to_f
+    line = unit * qty
+    lines << ['Eletro', code, desc, unit, qty, line]
+    subtotal += line
+  end
+
+  acessorios.each do |a|
+    code = (a['COD'] || '').strip
+    desc = (a['ACESSORIOS'] || a['ACESSORIO'] || a['ACESSORIOS'] || a.values[1]).to_s
+    unit = prices[code] || prices[desc] || 0.0
+    qty = (a['QTD'] || a['QTY'] || '1').to_f
+    line = unit * qty
+    lines << ['Acessório', code, desc, unit, qty, line]
+    subtotal += line
+  end
+
+  custo_mao_obra = valor_hora * horas
+  subtotal += custo_mao_obra
+
+  total_com_margem = subtotal * (1 + margem/100.0)
+  total_com_impostos = total_com_margem * (1 + impostos/100.0)
+
+  proposal_csv = File.join(output, 'proposta_items.csv')
+  CSV.open(proposal_csv, 'wb') do |csv|
+    csv << ['Categoria', 'COD', 'Descricao', 'PrecoUnitario', 'Qtde', 'TotalLinha']
+    lines.each do |l|
+      csv << l
+    end
+    csv << []
+    csv << ['Mao de Obra', '', '', valor_hora, horas, custo_mao_obra]
+    csv << []
+    csv << ['Subtotal', '', '', '', '', subtotal]
+    csv << ['Total com margem ('+margem.to_s+'%)', '', '', '', '', total_com_margem]
+    csv << ['Total com impostos ('+impostos.to_s+'%)', '', '', '', '', total_com_impostos]
+  end
+
+  summary = File.join(output, 'proposta_resumo.txt')
+  File.open(summary, 'w') do |f|
+    f.puts "Proposta gerada: #{Time.now}"
+    f.puts "Cliente: #{@settings['cliente']}"
+    f.puts "Moeda: #{moeda}"
+    f.puts "Subtotal: #{'%.2f' % subtotal}"
+    f.puts "Mão de obra: #{'%.2f' % custo_mao_obra} (#{horas} h @ #{valor_hora})"
+    f.puts "Total com margem: #{'%.2f' % total_com_margem}"
+    f.puts "Total com impostos: #{'%.2f' % total_com_impostos}"
+    f.puts "Arquivos: #{proposal_csv}, #{summary}"
+  end
+
+  UI.messagebox("Cotação gerada em: #{output}\nArquivo de itens: proposta_items.csv\nResumo: proposta_resumo.txt")
 end
