@@ -168,6 +168,7 @@ module DetailSimple
     submenu.add_item('Exportar Layout PNG') { export_layout_png }
     submenu.add_item('Gerar Cotação') { generate_quote }
     submenu.add_item('Gerar Detalhamento') { create_detail_scenes }
+    submenu.add_item('Gerar Projeto') { run_full_project }
     @loaded = true
   end
 
@@ -446,10 +447,24 @@ def create_toolbar
   cmd_quote.tooltip = 'Gerar cotação a partir das listas'
   toolbar.add_item cmd_quote
 
+  cmd_project = UI::Command.new('Gerar Projeto') { run_full_project }
+  cmd_project.tooltip = 'Executar fluxo completo: listas, detalhamento, pranchas e cotação'
+  toolbar.add_item cmd_project
+
   toolbar.show
 end
 
 create_toolbar
+
+def run_full_project
+  load_settings
+  output = @settings['output_dir'] || File.expand_path('..', File.dirname(__FILE__))
+  export_csvs
+  create_detail_scenes
+  generate_sheets
+  generate_quote
+  UI.messagebox("Projeto completo gerado em: #{output}")
+end
 
 def load_prices_file
   prices_file = File.join(File.dirname(__FILE__), 'prices.json')

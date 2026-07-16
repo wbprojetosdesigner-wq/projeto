@@ -26,6 +26,7 @@ Novas funcionalidades:
 
 - `Gerar Listas CSV`: varre o modelo e gera três arquivos CSV em `Pasta de saída` (materiais.csv, eletros.csv, acessorios.csv).
 - `Gerar Listas CSV`: varre o modelo e gera três arquivos CSV em `Pasta de saída` (materiais.csv, eletros.csv, acessorios.csv).
+- `Gerar Projeto`: executa o fluxo completo através de um único comando: gera listas CSV, cena de detalhamento, pranchas em escala 1:20 e cotação.
 
 Nota: o arquivo `acessorios.csv` agora contém as colunas: `COD`, `ACESSORIOS`, `MODELO`, `MEDIDA`, `COR`, `QTD`.
 
