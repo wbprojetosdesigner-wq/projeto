@@ -22,6 +22,8 @@ module DetailSimple
     @settings['cliente'] ||= ''
     @settings['endereco'] ||= ''
     @settings['observacoes'] ||= ''
+    @settings['export_dpi'] ||= 300
+    @settings['export_scale'] ||= 20
     @settings
   end
 
@@ -39,14 +41,16 @@ module DetailSimple
 
   def self.open_config
     load_settings
-    prompts = ['Nome do cliente', 'Endereço', 'Observações (linha única)', 'Pasta de saída (CSV/PNG)']
-    defaults = [@settings['cliente'], @settings['endereco'], @settings['observacoes'], @settings['output_dir']]
+    prompts = ['Nome do cliente', 'Endereço', 'Observações (linha única)', 'Pasta de saída (CSV/PNG)', 'DPI de exportação (ex: 300)', 'Escala numérica (ex: 20 para 1:20)']
+    defaults = [@settings['cliente'], @settings['endereco'], @settings['observacoes'], @settings['output_dir'], @settings['export_dpi'].to_s, @settings['export_scale'].to_s]
     input = UI.inputbox(prompts, defaults, 'Configurações - DetailSimple')
     if input
       @settings['cliente'] = input[0]
       @settings['endereco'] = input[1]
       @settings['observacoes'] = input[2]
       @settings['output_dir'] = input[3]
+      @settings['export_dpi'] = input[4].to_i
+      @settings['export_scale'] = input[5].to_i
       save_settings
       UI.messagebox("Configurações salvas.")
     end
@@ -326,7 +330,7 @@ def restore_doors_layers(doors, original)
   end
 end
 
-def export_top_view(output_dir, scale_label)
+def export_top_view(output_dir, scale_label, dpi=300, scale_ratio=20)
   model = Sketchup.active_model
   view = model.active_view
   center = model.bounds.center
@@ -334,12 +338,20 @@ def export_top_view(output_dir, scale_label)
   cam.perspective = false
   view.camera = cam
   view.zoom_extents
+  # compute pixel dimensions so that 1 model inch maps to (dpi/scale_ratio) pixels
+  width_in = model.bounds.width
+  height_in = model.bounds.depth
+  width_px = (width_in * dpi / scale_ratio).to_i
+  height_px = (height_in * dpi / scale_ratio).to_i
+  # clamp to reasonable sizes
+  width_px = [[width_px, 1200].max, 16000].min
+  height_px = [[height_px, 1200].max, 16000].min
   path = File.join(output_dir, "planta_baixa_#{scale_label}.png")
-  view.write_image(path, 3000, 2000, false)
+  view.write_image(path, width_px, height_px, false)
   path
 end
 
-def export_front_views(output_dir, scale_label)
+def export_front_views(output_dir, scale_label, dpi=300, scale_ratio=20)
   model = Sketchup.active_model
   view = model.active_view
   walls = find_by_type_keyword(['parede','wall','WALL'])
@@ -359,8 +371,15 @@ def export_front_views(output_dir, scale_label)
       cam.perspective = false
       view.camera = cam
       view.zoom_extents
+      # compute image size based on model extents (use larger dimension)
+      width_in = [b.width, b.depth].max
+      height_in = b.height
+      width_px = (width_in * dpi / scale_ratio).to_i
+      height_px = (height_in * dpi / scale_ratio).to_i
+      width_px = [[width_px, 1200].max, 16000].min
+      height_px = [[height_px, 1200].max, 16000].min
       path = File.join(output_dir, "vista_frontal_#{i}_#{scale_label}.png")
-      view.write_image(path, 1600, 1200, false)
+      view.write_image(path, width_px, height_px, false)
       exported << path
       i += 1
     end
@@ -375,8 +394,15 @@ def export_front_views(output_dir, scale_label)
       cam.perspective = false
       view.camera = cam
       view.zoom_extents
+      # compute image size
+      width_in = [model.bounds.width, model.bounds.depth].max
+      height_in = model.bounds.height
+      width_px = (width_in * dpi / scale_ratio).to_i
+      height_px = (height_in * dpi / scale_ratio).to_i
+      width_px = [[width_px, 1200].max, 16000].min
+      height_px = [[height_px, 1200].max, 16000].min
       path = File.join(output_dir, "vista_frontal_#{idx+1}_#{scale_label}.png")
-      view.write_image(path, 1600, 1200, false)
+      view.write_image(path, width_px, height_px, false)
       exported << path
     end
   end
@@ -387,12 +413,15 @@ def generate_sheets(scale = '1_20')
   load_settings
   model = Sketchup.active_model
   output = @settings['output_dir'] || File.expand_path('..', File.dirname(__FILE__))
+  dpi = (@settings['export_dpi'] || 300).to_i
+  scale_ratio = (@settings['export_scale'] || 20).to_i
+  scale_label = "1_#{scale_ratio}"
   # find doors and hide
   doors = find_by_type_keyword(['porta','door','DOOR'])
   original = hide_doors_temporarily(doors)
   begin
-    top = export_top_view(output, scale)
-    fronts = export_front_views(output, scale)
+    top = export_top_view(output, scale_label, dpi, scale_ratio)
+    fronts = export_front_views(output, scale_label, dpi, scale_ratio)
   ensure
     restore_doors_layers(doors, original)
   end

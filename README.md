@@ -28,6 +28,13 @@ Novas funcionalidades:
 - `Gerar Listas CSV`: varre o modelo e gera três arquivos CSV em `Pasta de saída` (materiais.csv, eletros.csv, acessorios.csv).
 
 Nota: o arquivo `acessorios.csv` agora contém as colunas: `COD`, `ACESSORIOS`, `MODELO`, `MEDIDA`, `COR`, `QTD`.
+
+Exportação em escala física (1:20):
+
+- O plugin permite exportar as pranchas (planta baixa e vistas frontais) em escala física configurável.
+- Em `Extensions > DetailSimple > Configurações` adicione o valor `Escala numérica` (por exemplo `20` para 1:20) e `DPI de exportação` (por exemplo `300`).
+- O plugin calcula automaticamente a resolução (pixels) necessária para que as imagens geradas representem a escala física escolhida quando impressas com o DPI configurado.
+- Padrões: `Escala = 20` (1:20) e `DPI = 300`.
 - `Exportar Layout PNG`: exporta uma imagem `layout.png` do ponto de vista ativo do SketchUp.
 - `Configurações`: agora inclui campos para `Nome do cliente`, `Endereço`, `Observações` e `Pasta de saída`.
 
